@@ -1,21 +1,36 @@
 name: owner-action
 
-run-name: "owner ${{ inputs.method }} ${{ inputs.endpoint }}: ${{ inputs.reason }}"
+run-name: "owner ${{ inputs.action }} ${{ inputs.repo }} ${{ inputs.id }}: ${{ inputs.reason }}"
 
 on:
   workflow_dispatch:
     inputs:
-      method:
-        description: HTTP method
+      action:
+        description: Named owner action (fixed list)
         type: choice
         required: true
-        options: [GET, POST, PUT, PATCH, DELETE]
-      endpoint:
-        description: "GitHub API endpoint, e.g. repos/Nishfleet/x/rulesets"
+        options:
+          - ruleset-create
+          - ruleset-update
+          - ruleset-delete
+          - org-ruleset-create
+          - org-ruleset-update
+          - repo-create
+          - repo-settings
+          - repo-archive
+          - actions-workflow-permissions
+          - vulnerability-alerts-enable
+          - test-read-org
+      repo:
+        description: Repo name under Nishfleet (only for repo actions)
         type: string
-        required: true
+        required: false
+      id:
+        description: Numeric ruleset id (only for update/delete actions)
+        type: string
+        required: false
       body:
-        description: Optional JSON request body (never put secrets here)
+        description: JSON body (only for actions that take one; never put secrets here)
         type: string
         required: false
       reason:
@@ -30,50 +45,160 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  call:
+  announce:
+    name: announce request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Show exactly what the owner is asked to approve
+        shell: bash
+        env:
+          ACTION: ${{ inputs.action }}
+          REPO: ${{ inputs.repo }}
+          ID: ${{ inputs.id }}
+          BODY: ${{ inputs.body }}
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          owner="Nishfleet"
+          need_repo=0
+          need_id=0
+          body_mode=none   # none | required | fixed
+          payload=""
+
+          case "$ACTION" in
+            ruleset-create)               method=POST;   need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@/rulesets" ;;
+            ruleset-update)               method=PUT;    need_repo=1; need_id=1; body_mode=required; tpl="repos/$owner/@REPO@/rulesets/@ID@" ;;
+            ruleset-delete)               method=DELETE; need_repo=1; need_id=1; tpl="repos/$owner/@REPO@/rulesets/@ID@" ;;
+            org-ruleset-create)           method=POST;   body_mode=required; tpl="orgs/$owner/rulesets" ;;
+            org-ruleset-update)           method=PUT;    need_id=1; body_mode=required; tpl="orgs/$owner/rulesets/@ID@" ;;
+            repo-create)                  method=POST;   body_mode=required; tpl="orgs/$owner/repos" ;;
+            repo-settings)                method=PATCH;  need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@" ;;
+            repo-archive)                 method=PATCH;  need_repo=1; body_mode=fixed; payload='{"archived":true}'; tpl="repos/$owner/@REPO@" ;;
+            actions-workflow-permissions) method=PUT;    need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@/actions/permissions/workflow" ;;
+            vulnerability-alerts-enable)  method=PUT;    need_repo=1; tpl="repos/$owner/@REPO@/vulnerability-alerts" ;;
+            test-read-org)                method=GET;    tpl="orgs/$owner" ;;
+            *) fail "unknown action" ;;
+          esac
+
+          endpoint="$tpl"
+
+          if [[ "$need_repo" == 1 ]]; then
+            [[ "$REPO" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || fail "invalid or missing repo"
+            [[ "$REPO" =~ ^\.+$ ]] && fail "invalid repo"
+            endpoint="${endpoint//@REPO@/$REPO}"
+          else
+            [[ -z "$REPO" ]] || fail "repo not allowed for this action"
+          fi
+
+          if [[ "$need_id" == 1 ]]; then
+            [[ "$ID" =~ ^[0-9]{1,20}$ ]] || fail "invalid or missing id"
+            endpoint="${endpoint//@ID@/$ID}"
+          else
+            [[ -z "$ID" ]] || fail "id not allowed for this action"
+          fi
+
+          case "$body_mode" in
+            required)
+              [[ -n "$BODY" ]] || fail "body required for this action"
+              printf '%s' "$BODY" | jq -e . >/dev/null 2>&1 || fail "body is not valid JSON"
+              payload="$BODY"
+              ;;
+            *)
+              [[ -z "$BODY" ]] || fail "body not allowed for this action"
+              ;;
+          esac
+
+          sha="$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1)"
+          if [[ -n "$payload" ]]; then
+            head="$(printf '%s' "$payload" | jq -c . | head -c 200)"
+          else
+            head="(none)"
+          fi
+          echo "OWNER APPROVAL REQUEST: action=$ACTION method=$method endpoint=$endpoint body_sha256=$sha body_first200=$head"
+
+  act:
     name: owner api call
+    needs: announce
     runs-on: ubuntu-24.04
     environment: owner
     timeout-minutes: 5
+    permissions: {}
     steps:
-      - name: Call GitHub API as owner
+      - name: Re-validate and call GitHub API as owner
         shell: bash
         env:
-          METHOD: ${{ inputs.method }}
-          ENDPOINT: ${{ inputs.endpoint }}
+          ACTION: ${{ inputs.action }}
+          REPO: ${{ inputs.repo }}
+          ID: ${{ inputs.id }}
           BODY: ${{ inputs.body }}
           GH_TOKEN: ${{ secrets.OWNER_TOKEN }}
         run: |
           set -uo pipefail
+          fail() { echo "::error::$1"; exit 1; }
 
-          re='^[A-Za-z0-9._~/-]+(\?[A-Za-z0-9._~=&%-]*)?$'
-          if [[ ! "$ENDPOINT" =~ $re ]] || [[ "$ENDPOINT" == *..* ]] || [[ "$ENDPOINT" == -* ]]; then
-            echo "::error::invalid endpoint"
-            exit 1
+          owner="Nishfleet"
+          need_repo=0
+          need_id=0
+          body_mode=none   # none | required | fixed
+          payload=""
+
+          case "$ACTION" in
+            ruleset-create)               method=POST;   need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@/rulesets" ;;
+            ruleset-update)               method=PUT;    need_repo=1; need_id=1; body_mode=required; tpl="repos/$owner/@REPO@/rulesets/@ID@" ;;
+            ruleset-delete)               method=DELETE; need_repo=1; need_id=1; tpl="repos/$owner/@REPO@/rulesets/@ID@" ;;
+            org-ruleset-create)           method=POST;   body_mode=required; tpl="orgs/$owner/rulesets" ;;
+            org-ruleset-update)           method=PUT;    need_id=1; body_mode=required; tpl="orgs/$owner/rulesets/@ID@" ;;
+            repo-create)                  method=POST;   body_mode=required; tpl="orgs/$owner/repos" ;;
+            repo-settings)                method=PATCH;  need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@" ;;
+            repo-archive)                 method=PATCH;  need_repo=1; body_mode=fixed; payload='{"archived":true}'; tpl="repos/$owner/@REPO@" ;;
+            actions-workflow-permissions) method=PUT;    need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@/actions/permissions/workflow" ;;
+            vulnerability-alerts-enable)  method=PUT;    need_repo=1; tpl="repos/$owner/@REPO@/vulnerability-alerts" ;;
+            test-read-org)                method=GET;    tpl="orgs/$owner" ;;
+            *) fail "unknown action" ;;
+          esac
+
+          endpoint="$tpl"
+
+          if [[ "$need_repo" == 1 ]]; then
+            [[ "$REPO" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || fail "invalid or missing repo"
+            [[ "$REPO" =~ ^\.+$ ]] && fail "invalid repo"
+            endpoint="${endpoint//@REPO@/$REPO}"
+          else
+            [[ -z "$REPO" ]] || fail "repo not allowed for this action"
           fi
 
-          args=(-X "$METHOD" "$ENDPOINT")
-          if [[ -n "$BODY" ]]; then
-            if ! printf '%s' "$BODY" | jq -e . >/dev/null 2>&1; then
-              echo "::error::body is not valid JSON"
-              exit 1
-            fi
-            args+=(--input -)
+          if [[ "$need_id" == 1 ]]; then
+            [[ "$ID" =~ ^[0-9]{1,20}$ ]] || fail "invalid or missing id"
+            endpoint="${endpoint//@ID@/$ID}"
+          else
+            [[ -z "$ID" ]] || fail "id not allowed for this action"
           fi
+
+          case "$body_mode" in
+            required)
+              [[ -n "$BODY" ]] || fail "body required for this action"
+              printf '%s' "$BODY" | jq -e . >/dev/null 2>&1 || fail "body is not valid JSON"
+              payload="$BODY"
+              ;;
+            *)
+              [[ -z "$BODY" ]] || fail "body not allowed for this action"
+              ;;
+          esac
 
           out="$(mktemp)"
-          if [[ -n "$BODY" ]]; then
-            printf '%s' "$BODY" | gh api -i "${args[@]}" >"$out" 2>/dev/null
+          if [[ -n "$payload" ]]; then
+            printf '%s' "$payload" | gh api -i -X "$method" "$endpoint" --input - >"$out" 2>/dev/null
           else
-            gh api -i "${args[@]}" >"$out" 2>/dev/null </dev/null
+            gh api -i -X "$method" "$endpoint" >"$out" 2>/dev/null </dev/null
           fi
 
           # Only the status line is ever printed; the response body is never shown.
           status_line="$(head -n 1 "$out" | tr -d '\r')"
           rm -f "$out"
-          echo "$METHOD $ENDPOINT -> ${status_line:-no response}"
+          echo "$ACTION $endpoint -> ${status_line:-no response}"
 
           code="$(awk '{print $2}' <<<"$status_line")"
-          if [[ ! "$code" =~ ^2[0-9][0-9]$ ]]; then
-            exit 1
-          fi
+          [[ "$code" =~ ^2[0-9][0-9]$ ]] || exit 1
