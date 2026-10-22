@@ -1,0 +1,79 @@
+name: owner-action
+
+run-name: "owner ${{ inputs.method }} ${{ inputs.endpoint }}: ${{ inputs.reason }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      method:
+        description: HTTP method
+        type: choice
+        required: true
+        options: [GET, POST, PUT, PATCH, DELETE]
+      endpoint:
+        description: "GitHub API endpoint, e.g. repos/Nishfleet/x/rulesets"
+        type: string
+        required: true
+      body:
+        description: Optional JSON request body (never put secrets here)
+        type: string
+        required: false
+      reason:
+        description: Short plain-English reason shown to the owner
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: owner-action-${{ github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  call:
+    name: owner api call
+    runs-on: ubuntu-24.04
+    environment: owner
+    timeout-minutes: 5
+    steps:
+      - name: Call GitHub API as owner
+        shell: bash
+        env:
+          METHOD: ${{ inputs.method }}
+          ENDPOINT: ${{ inputs.endpoint }}
+          BODY: ${{ inputs.body }}
+          GH_TOKEN: ${{ secrets.OWNER_TOKEN }}
+        run: |
+          set -uo pipefail
+
+          re='^[A-Za-z0-9._~/-]+(\?[A-Za-z0-9._~=&%-]*)?$'
+          if [[ ! "$ENDPOINT" =~ $re ]] || [[ "$ENDPOINT" == *..* ]] || [[ "$ENDPOINT" == -* ]]; then
+            echo "::error::invalid endpoint"
+            exit 1
+          fi
+
+          args=(-X "$METHOD" "$ENDPOINT")
+          if [[ -n "$BODY" ]]; then
+            if ! printf '%s' "$BODY" | jq -e . >/dev/null 2>&1; then
+              echo "::error::body is not valid JSON"
+              exit 1
+            fi
+            args+=(--input -)
+          fi
+
+          out="$(mktemp)"
+          if [[ -n "$BODY" ]]; then
+            printf '%s' "$BODY" | gh api -i "${args[@]}" >"$out" 2>/dev/null
+          else
+            gh api -i "${args[@]}" >"$out" 2>/dev/null </dev/null
+          fi
+
+          # Only the status line is ever printed; the response body is never shown.
+          status_line="$(head -n 1 "$out" | tr -d '\r')"
+          rm -f "$out"
+          echo "$METHOD $ENDPOINT -> ${status_line:-no response}"
+
+          code="$(awk '{print $2}' <<<"$status_line")"
+          if [[ ! "$code" =~ ^2[0-9][0-9]$ ]]; then
+            exit 1
+          fi
