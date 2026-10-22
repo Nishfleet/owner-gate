@@ -1,6 +1,6 @@
 name: owner-action
 
-run-name: "owner ${{ inputs.action }} ${{ inputs.repo }} ${{ inputs.id }} body=${{ toJSON(inputs.body) }} | reason (agent-provided): ${{ inputs.reason }}"
+run-name: "owner ${{ inputs.action }} ${{ inputs.repo }} ${{ inputs.id }} ${{ inputs.body && format('body={0} ', toJSON(inputs.body)) || '' }}| reason (agent-provided): ${{ inputs.reason }}"
 
 on:
   workflow_dispatch:
@@ -101,6 +101,7 @@ jobs:
           case "$body_mode" in
             required)
               [[ -n "$BODY" ]] || fail "body required for this action"
+              [[ "$(printf '%s' "$BODY" | wc -c)" -le 8000 ]] || fail "body larger than 8000 bytes"
               printf '%s' "$BODY" | jq empty >/dev/null 2>&1 || fail "body is not valid JSON"
               printf '%s' "$BODY" | jq -s -e 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 \
                 || fail "body must be a single JSON object"
@@ -113,13 +114,14 @@ jobs:
                     || fail "repo-settings body may not contain visibility, private, security_and_analysis, archived or default_branch"
                   ;;
                 actions-workflow-permissions)
-                  printf '%s' "$BODY" | jq -e '(.can_approve_pull_request_reviews // false) == false' >/dev/null 2>&1 \
-                    || fail "can_approve_pull_request_reviews must be absent or false"
+                  printf '%s' "$BODY" | jq -e '((.can_approve_pull_request_reviews // false) == false)
+                    and ((.default_workflow_permissions // "read") == "read")' >/dev/null 2>&1 \
+                    || fail "can_approve_pull_request_reviews must be absent or false, and default_workflow_permissions absent or read"
                   ;;
                 ruleset-create|ruleset-update)
-                  printf '%s' "$BODY" | jq -e '(((.enforcement // "") | tostring | ascii_downcase) != "disabled")
+                  printf '%s' "$BODY" | jq -e '((.enforcement | type == "string") and (.enforcement | ascii_downcase) == "active")
                     and ((.bypass_actors // []) == [])' >/dev/null 2>&1 \
-                    || fail "ruleset body may not disable enforcement or set bypass_actors"
+                    || fail "ruleset body must set enforcement to active and may not set bypass_actors"
                   ;;
               esac
               ;;
@@ -221,6 +223,7 @@ jobs:
           case "$body_mode" in
             required)
               [[ -n "$BODY" ]] || fail "body required for this action"
+              [[ "$(printf '%s' "$BODY" | wc -c)" -le 8000 ]] || fail "body larger than 8000 bytes"
               printf '%s' "$BODY" | jq empty >/dev/null 2>&1 || fail "body is not valid JSON"
               printf '%s' "$BODY" | jq -s -e 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 \
                 || fail "body must be a single JSON object"
@@ -233,13 +236,14 @@ jobs:
                     || fail "repo-settings body may not contain visibility, private, security_and_analysis, archived or default_branch"
                   ;;
                 actions-workflow-permissions)
-                  printf '%s' "$BODY" | jq -e '(.can_approve_pull_request_reviews // false) == false' >/dev/null 2>&1 \
-                    || fail "can_approve_pull_request_reviews must be absent or false"
+                  printf '%s' "$BODY" | jq -e '((.can_approve_pull_request_reviews // false) == false)
+                    and ((.default_workflow_permissions // "read") == "read")' >/dev/null 2>&1 \
+                    || fail "can_approve_pull_request_reviews must be absent or false, and default_workflow_permissions absent or read"
                   ;;
                 ruleset-create|ruleset-update)
-                  printf '%s' "$BODY" | jq -e '(((.enforcement // "") | tostring | ascii_downcase) != "disabled")
+                  printf '%s' "$BODY" | jq -e '((.enforcement | type == "string") and (.enforcement | ascii_downcase) == "active")
                     and ((.bypass_actors // []) == [])' >/dev/null 2>&1 \
-                    || fail "ruleset body may not disable enforcement or set bypass_actors"
+                    || fail "ruleset body must set enforcement to active and may not set bypass_actors"
                   ;;
               esac
               ;;

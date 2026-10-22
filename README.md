@@ -44,9 +44,11 @@ Body restrictions (loosening protections stays a by-hand owner job):
 - `repo-settings`: the body may not contain the keys `visibility`, `private`,
   `security_and_analysis`, `archived` (use `repo-archive`) or `default_branch`.
 - `actions-workflow-permissions`: `can_approve_pull_request_reviews` must be
-  absent or false.
-- `ruleset-create` and `ruleset-update`: no `"enforcement":"disabled"`, and
+  absent or false, and `default_workflow_permissions` must be absent or `read`.
+- `ruleset-create` and `ruleset-update`: `enforcement` must be present and
+  `active` (any case; `evaluate`, `disabled` and absent are refused), and
   `bypass_actors` must be absent or empty.
+- Any body: a single JSON object, at most 8000 bytes.
 
 Org rulesets (`orgs/Nishfleet/rulesets`) have no action: the owner edits them by
 hand. There is no `org-ruleset-*` action on purpose, so the gate can never
@@ -60,6 +62,9 @@ retarget or loosen an org-wide ruleset that covers itself.
    action, repo, id, the body, and the `reason (agent-provided)`. The reason is
    written by the agent, not by the system.
 2. The `act` job waits for the owner to approve or reject in the GitHub app.
+   Before approving, open the run and read the full body in the announce step
+   summary, because the run name can be truncated. Review pending approvals one
+   at a time, because parallel runs are possible.
 3. On approval, `act` re-validates and resolves the same way, and compares the
    method, endpoint and body sha256 with what `announce` published. Any mismatch
    fails the run before the call.
@@ -79,7 +84,9 @@ file from the dispatched ref, so the guarantee depends on all of these:
 - the environment `owner` keeps "deployment branches: main only", so no branch
   copy of this workflow can obtain the secret;
 - the environment's required reviewer is the owner, and admins cannot bypass it;
-- `main` is frozen by a ruleset, so changes land only when the owner lifts it.
+- `main` is frozen by a ruleset, so changes land only when the owner lifts it;
+- agents dispatch only with credentials that cannot approve deployments, and
+  approval happens only in the owner's GitHub app.
 
 Removing any of these removes the guarantee.
 
