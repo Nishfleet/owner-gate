@@ -88,6 +88,7 @@ jobs:
           if [[ "$need_repo" == 1 ]]; then
             [[ "$REPO" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || fail "invalid or missing repo"
             [[ "$REPO" =~ ^\.+$ ]] && fail "invalid repo"
+            [[ "${REPO,,}" == "owner-gate" ]] && fail "the gate cannot act on itself"
             endpoint="${endpoint//@REPO@/$REPO}"
           else
             [[ -z "$REPO" ]] || fail "repo not allowed for this action"
@@ -105,6 +106,17 @@ jobs:
               [[ -n "$BODY" ]] || fail "body required for this action"
               printf '%s' "$BODY" | jq -e . >/dev/null 2>&1 || fail "body is not valid JSON"
               payload="$BODY"
+              if [[ "$ACTION" == org-ruleset-* ]]; then
+                # owner-gate repository id (gh api repos/Nishfleet/owner-gate --jq .id)
+                gate_id="1430016200"
+                # Check raw text, plus decoded keys and scalars (catches \u escapes).
+                if [[ "${BODY,,}" == *owner-gate* ]] ||
+                  ! printf '%s' "$BODY" | jq -e --arg id "$gate_id" \
+                    '[.. | (objects | keys[]), scalars | tostring | ascii_downcase]
+                     | any(contains("owner-gate") or . == $id) | not' >/dev/null 2>&1; then
+                  fail "the gate cannot act on itself"
+                fi
+              fi
               ;;
             *)
               [[ -z "$BODY" ]] || fail "body not allowed for this action"
@@ -165,6 +177,7 @@ jobs:
           if [[ "$need_repo" == 1 ]]; then
             [[ "$REPO" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || fail "invalid or missing repo"
             [[ "$REPO" =~ ^\.+$ ]] && fail "invalid repo"
+            [[ "${REPO,,}" == "owner-gate" ]] && fail "the gate cannot act on itself"
             endpoint="${endpoint//@REPO@/$REPO}"
           else
             [[ -z "$REPO" ]] || fail "repo not allowed for this action"
@@ -182,6 +195,17 @@ jobs:
               [[ -n "$BODY" ]] || fail "body required for this action"
               printf '%s' "$BODY" | jq -e . >/dev/null 2>&1 || fail "body is not valid JSON"
               payload="$BODY"
+              if [[ "$ACTION" == org-ruleset-* ]]; then
+                # owner-gate repository id (gh api repos/Nishfleet/owner-gate --jq .id)
+                gate_id="1430016200"
+                # Check raw text, plus decoded keys and scalars (catches \u escapes).
+                if [[ "${BODY,,}" == *owner-gate* ]] ||
+                  ! printf '%s' "$BODY" | jq -e --arg id "$gate_id" \
+                    '[.. | (objects | keys[]), scalars | tostring | ascii_downcase]
+                     | any(contains("owner-gate") or . == $id) | not' >/dev/null 2>&1; then
+                  fail "the gate cannot act on itself"
+                fi
+              fi
               ;;
             *)
               [[ -z "$BODY" ]] || fail "body not allowed for this action"
