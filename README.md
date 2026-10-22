@@ -67,8 +67,9 @@ retarget or loosen an org-wide ruleset that covers itself.
    Response bodies and `gh` error text are never printed. Non-2xx fails the run.
 
 Re-running an approved `act` job repeats the same call with the same inputs.
-Runs are serialised in one concurrency group (`owner-action`, no cancel), so a
-second request waits behind a pending one.
+There is no `concurrency` setting on purpose: a shared group would let a newer
+dispatch cancel or replace a run that is waiting for the owner. Each request is
+its own run and needs its own approval.
 
 ## Trust chain
 

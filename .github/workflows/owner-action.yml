@@ -38,10 +38,6 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: owner-action
-  cancel-in-progress: false
-
 jobs:
   announce:
     name: announce request
