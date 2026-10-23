@@ -1,6 +1,6 @@
 name: owner-action
 
-run-name: "owner ${{ inputs.action }} ${{ inputs.repo }} ${{ inputs.id }}: ${{ inputs.reason }}"
+run-name: "owner ${{ inputs.action }} ${{ inputs.repo }} ${{ inputs.id }} ${{ inputs.body && format('body={0} ', toJSON(inputs.body)) || '' }}| reason (agent-provided): ${{ inputs.reason }}"
 
 on:
   workflow_dispatch:
@@ -13,8 +13,6 @@ on:
           - ruleset-create
           - ruleset-update
           - ruleset-delete
-          - org-ruleset-create
-          - org-ruleset-update
           - repo-create
           - repo-settings
           - repo-archive
@@ -30,19 +28,15 @@ on:
         type: string
         required: false
       body:
-        description: JSON body (only for actions that take one; never put secrets here)
+        description: JSON object body (only for actions that take one; never put secrets here)
         type: string
         required: false
       reason:
-        description: Short plain-English reason shown to the owner
+        description: Plain-English reason; must name the target (ids are not resolved for the owner)
         type: string
         required: true
 
 permissions: {}
-
-concurrency:
-  group: owner-action-${{ github.run_id }}
-  cancel-in-progress: true
 
 jobs:
   announce:
@@ -50,8 +44,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
+    outputs:
+      method: ${{ steps.resolve.outputs.method }}
+      endpoint: ${{ steps.resolve.outputs.endpoint }}
+      body_sha256: ${{ steps.resolve.outputs.body_sha256 }}
     steps:
-      - name: Show exactly what the owner is asked to approve
+      - name: Show what the owner is asked to approve
+        id: resolve
         shell: bash
         env:
           ACTION: ${{ inputs.action }}
@@ -72,8 +71,6 @@ jobs:
             ruleset-create)               method=POST;   need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@/rulesets" ;;
             ruleset-update)               method=PUT;    need_repo=1; need_id=1; body_mode=required; tpl="repos/$owner/@REPO@/rulesets/@ID@" ;;
             ruleset-delete)               method=DELETE; need_repo=1; need_id=1; tpl="repos/$owner/@REPO@/rulesets/@ID@" ;;
-            org-ruleset-create)           method=POST;   body_mode=required; tpl="orgs/$owner/rulesets" ;;
-            org-ruleset-update)           method=PUT;    need_id=1; body_mode=required; tpl="orgs/$owner/rulesets/@ID@" ;;
             repo-create)                  method=POST;   body_mode=required; tpl="orgs/$owner/repos" ;;
             repo-settings)                method=PATCH;  need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@" ;;
             repo-archive)                 method=PATCH;  need_repo=1; body_mode=fixed; payload='{"archived":true}'; tpl="repos/$owner/@REPO@" ;;
@@ -104,19 +101,29 @@ jobs:
           case "$body_mode" in
             required)
               [[ -n "$BODY" ]] || fail "body required for this action"
-              printf '%s' "$BODY" | jq -e . >/dev/null 2>&1 || fail "body is not valid JSON"
+              [[ "$(printf '%s' "$BODY" | wc -c)" -le 8000 ]] || fail "body larger than 8000 bytes"
+              printf '%s' "$BODY" | jq empty >/dev/null 2>&1 || fail "body is not valid JSON"
+              printf '%s' "$BODY" | jq -s -e 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 \
+                || fail "body must be a single JSON object"
               payload="$BODY"
-              if [[ "$ACTION" == org-ruleset-* ]]; then
-                # owner-gate repository id (gh api repos/Nishfleet/owner-gate --jq .id)
-                gate_id="1430016200"
-                # Check raw text, plus decoded keys and scalars (catches \u escapes).
-                if [[ "${BODY,,}" == *owner-gate* ]] ||
-                  ! printf '%s' "$BODY" | jq -e --arg id "$gate_id" \
-                    '[.. | (objects | keys[]), scalars | tostring | ascii_downcase]
-                     | any(contains("owner-gate") or . == $id) | not' >/dev/null 2>&1; then
-                  fail "the gate cannot act on itself"
-                fi
-              fi
+              case "$ACTION" in
+                repo-settings)
+                  printf '%s' "$BODY" | jq -e '[.. | objects | keys[]]
+                    | any(. == "visibility" or . == "private" or . == "security_and_analysis" or . == "archived" or . == "default_branch")
+                    | not' >/dev/null 2>&1 \
+                    || fail "repo-settings body may not contain visibility, private, security_and_analysis, archived or default_branch"
+                  ;;
+                actions-workflow-permissions)
+                  printf '%s' "$BODY" | jq -e '((.can_approve_pull_request_reviews // false) == false)
+                    and ((.default_workflow_permissions // "read") == "read")' >/dev/null 2>&1 \
+                    || fail "can_approve_pull_request_reviews must be absent or false, and default_workflow_permissions absent or read"
+                  ;;
+                ruleset-create|ruleset-update)
+                  printf '%s' "$BODY" | jq -e '((.enforcement | type == "string") and (.enforcement | ascii_downcase) == "active")
+                    and ((.bypass_actors // []) == [])' >/dev/null 2>&1 \
+                    || fail "ruleset body must set enforcement to active and may not set bypass_actors"
+                  ;;
+              esac
               ;;
             *)
               [[ -z "$BODY" ]] || fail "body not allowed for this action"
@@ -125,11 +132,33 @@ jobs:
 
           sha="$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1)"
           if [[ -n "$payload" ]]; then
-            head="$(printf '%s' "$payload" | jq -c . | head -c 200)"
+            full="$(printf '%s' "$payload" | jq -c .)"
           else
-            head="(none)"
+            full="(none)"
           fi
-          echo "OWNER APPROVAL REQUEST: action=$ACTION method=$method endpoint=$endpoint body_sha256=$sha body_first200=$head"
+
+          # Full request, readable on the run page and in the log. Public by contract.
+          echo "OWNER APPROVAL REQUEST: action=$ACTION method=$method endpoint=$endpoint body_sha256=$sha body=$full"
+          {
+            echo "### Owner approval request"
+            echo
+            echo "- action: \`$ACTION\`"
+            echo "- method: \`$method\`"
+            echo "- endpoint: \`$endpoint\`"
+            echo "- body sha256: \`$sha\`"
+            echo
+            echo "Full body (compacted JSON):"
+            echo
+            echo '```json'
+            echo "$full"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "method=$method"
+            echo "endpoint=$endpoint"
+            echo "body_sha256=$sha"
+          } >>"$GITHUB_OUTPUT"
 
   act:
     name: owner api call
@@ -146,6 +175,9 @@ jobs:
           REPO: ${{ inputs.repo }}
           ID: ${{ inputs.id }}
           BODY: ${{ inputs.body }}
+          EXPECT_METHOD: ${{ needs.announce.outputs.method }}
+          EXPECT_ENDPOINT: ${{ needs.announce.outputs.endpoint }}
+          EXPECT_SHA256: ${{ needs.announce.outputs.body_sha256 }}
           GH_TOKEN: ${{ secrets.OWNER_TOKEN }}
         run: |
           set -uo pipefail
@@ -161,8 +193,6 @@ jobs:
             ruleset-create)               method=POST;   need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@/rulesets" ;;
             ruleset-update)               method=PUT;    need_repo=1; need_id=1; body_mode=required; tpl="repos/$owner/@REPO@/rulesets/@ID@" ;;
             ruleset-delete)               method=DELETE; need_repo=1; need_id=1; tpl="repos/$owner/@REPO@/rulesets/@ID@" ;;
-            org-ruleset-create)           method=POST;   body_mode=required; tpl="orgs/$owner/rulesets" ;;
-            org-ruleset-update)           method=PUT;    need_id=1; body_mode=required; tpl="orgs/$owner/rulesets/@ID@" ;;
             repo-create)                  method=POST;   body_mode=required; tpl="orgs/$owner/repos" ;;
             repo-settings)                method=PATCH;  need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@" ;;
             repo-archive)                 method=PATCH;  need_repo=1; body_mode=fixed; payload='{"archived":true}'; tpl="repos/$owner/@REPO@" ;;
@@ -193,24 +223,40 @@ jobs:
           case "$body_mode" in
             required)
               [[ -n "$BODY" ]] || fail "body required for this action"
-              printf '%s' "$BODY" | jq -e . >/dev/null 2>&1 || fail "body is not valid JSON"
+              [[ "$(printf '%s' "$BODY" | wc -c)" -le 8000 ]] || fail "body larger than 8000 bytes"
+              printf '%s' "$BODY" | jq empty >/dev/null 2>&1 || fail "body is not valid JSON"
+              printf '%s' "$BODY" | jq -s -e 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 \
+                || fail "body must be a single JSON object"
               payload="$BODY"
-              if [[ "$ACTION" == org-ruleset-* ]]; then
-                # owner-gate repository id (gh api repos/Nishfleet/owner-gate --jq .id)
-                gate_id="1430016200"
-                # Check raw text, plus decoded keys and scalars (catches \u escapes).
-                if [[ "${BODY,,}" == *owner-gate* ]] ||
-                  ! printf '%s' "$BODY" | jq -e --arg id "$gate_id" \
-                    '[.. | (objects | keys[]), scalars | tostring | ascii_downcase]
-                     | any(contains("owner-gate") or . == $id) | not' >/dev/null 2>&1; then
-                  fail "the gate cannot act on itself"
-                fi
-              fi
+              case "$ACTION" in
+                repo-settings)
+                  printf '%s' "$BODY" | jq -e '[.. | objects | keys[]]
+                    | any(. == "visibility" or . == "private" or . == "security_and_analysis" or . == "archived" or . == "default_branch")
+                    | not' >/dev/null 2>&1 \
+                    || fail "repo-settings body may not contain visibility, private, security_and_analysis, archived or default_branch"
+                  ;;
+                actions-workflow-permissions)
+                  printf '%s' "$BODY" | jq -e '((.can_approve_pull_request_reviews // false) == false)
+                    and ((.default_workflow_permissions // "read") == "read")' >/dev/null 2>&1 \
+                    || fail "can_approve_pull_request_reviews must be absent or false, and default_workflow_permissions absent or read"
+                  ;;
+                ruleset-create|ruleset-update)
+                  printf '%s' "$BODY" | jq -e '((.enforcement | type == "string") and (.enforcement | ascii_downcase) == "active")
+                    and ((.bypass_actors // []) == [])' >/dev/null 2>&1 \
+                    || fail "ruleset body must set enforcement to active and may not set bypass_actors"
+                  ;;
+              esac
               ;;
             *)
               [[ -z "$BODY" ]] || fail "body not allowed for this action"
               ;;
           esac
+
+          # Bind this call to what announce showed the owner.
+          sha="$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1)"
+          [[ "$method" == "$EXPECT_METHOD" ]] || fail "method differs from announce"
+          [[ "$endpoint" == "$EXPECT_ENDPOINT" ]] || fail "endpoint differs from announce"
+          [[ "$sha" == "$EXPECT_SHA256" ]] || fail "body differs from announce"
 
           out="$(mktemp)"
           if [[ -n "$payload" ]]; then
@@ -219,7 +265,8 @@ jobs:
             gh api -i -X "$method" "$endpoint" >"$out" 2>/dev/null </dev/null
           fi
 
-          # Only the status line is ever printed; the response body is never shown.
+          # Only the status line is ever printed; the response body and gh stderr
+          # are never shown (API error text can echo request data into a public log).
           status_line="$(head -n 1 "$out" | tr -d '\r')"
           rm -f "$out"
           echo "$ACTION $endpoint -> ${status_line:-no response}"
