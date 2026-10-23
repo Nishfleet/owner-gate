@@ -92,9 +92,12 @@ Removing any of these removes the guarantee.
 
 ## Add an action
 
-Open a PR that adds the action to the `options` list and to the `case` block in
-BOTH jobs (`announce` and `act`) of `.github/workflows/owner-action.yml`. The
-owner lifts the main ruleset to merge it.
+Open a PR that adds the action to the `options` list in
+`.github/workflows/owner-action.yml` and to the `case` block in
+`.github/actions/validate-inputs/action.yml` (the one copy of the validation
+that both the `announce` and `act` jobs run). The owner lifts the main ruleset
+to merge it. The `ci` workflow checks every accepted and rejected input shape
+against that one copy, so add or adjust a matrix case there too.
 
 ## Rules
 

@@ -1,0 +1,136 @@
+name: Validate owner-action inputs
+description: >
+  The one copy of the input validation shared by the announce and act jobs of
+  owner-action.yml. Maps a named action to exactly one method and endpoint,
+  validates the repo, id and body inputs, and outputs the resolved request.
+  Rejects unknown actions, missing or disallowed fields, invalid or oversized
+  bodies, and any body that loosens a protection (repo visibility or default
+  branch changes, workflow approval rights or write permissions, non-active or
+  bypass-able rulesets).
+
+inputs:
+  action:
+    description: Named owner action (fixed list)
+    required: true
+  repo:
+    description: Repo name under Nishfleet (only for repo actions)
+    required: false
+    default: ''
+  id:
+    description: Numeric ruleset id (only for update/delete actions)
+    required: false
+    default: ''
+  body:
+    description: JSON object body (only for actions that take one; never put secrets here)
+    required: false
+    default: ''
+
+outputs:
+  method:
+    description: HTTP method of the resolved request
+    value: ${{ steps.resolve.outputs.method }}
+  endpoint:
+    description: Resolved API endpoint path
+    value: ${{ steps.resolve.outputs.endpoint }}
+  body_sha256:
+    description: sha256 of the compacted payload sent to the API (empty-string sha256 when there is no body)
+    value: ${{ steps.resolve.outputs.body_sha256 }}
+  payload:
+    description: Compacted JSON payload sent to the API ('' when the action takes no body)
+    value: ${{ steps.resolve.outputs.payload }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate
+      id: resolve
+      shell: bash
+      env:
+        ACTION: ${{ inputs.action }}
+        REPO: ${{ inputs.repo }}
+        ID: ${{ inputs.id }}
+        BODY: ${{ inputs.body }}
+      run: |
+        set -uo pipefail
+        fail() { echo "::error::$1"; exit 1; }
+
+        owner="Nishfleet"
+        need_repo=0
+        need_id=0
+        body_mode=none   # none | required | fixed
+        payload=""
+
+        case "$ACTION" in
+          ruleset-create)               method=POST;   need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@/rulesets" ;;
+          ruleset-update)               method=PUT;    need_repo=1; need_id=1; body_mode=required; tpl="repos/$owner/@REPO@/rulesets/@ID@" ;;
+          ruleset-delete)               method=DELETE; need_repo=1; need_id=1; tpl="repos/$owner/@REPO@/rulesets/@ID@" ;;
+          repo-create)                  method=POST;   body_mode=required; tpl="orgs/$owner/repos" ;;
+          repo-settings)                method=PATCH;  need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@" ;;
+          repo-archive)                 method=PATCH;  need_repo=1; body_mode=fixed; payload='{"archived":true}'; tpl="repos/$owner/@REPO@" ;;
+          actions-workflow-permissions) method=PUT;    need_repo=1; body_mode=required; tpl="repos/$owner/@REPO@/actions/permissions/workflow" ;;
+          vulnerability-alerts-enable)  method=PUT;    need_repo=1; tpl="repos/$owner/@REPO@/vulnerability-alerts" ;;
+          test-read-org)                method=GET;    tpl="orgs/$owner" ;;
+          *) fail "unknown action" ;;
+        esac
+
+        endpoint="$tpl"
+
+        if [[ "$need_repo" == 1 ]]; then
+          [[ "$REPO" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || fail "invalid or missing repo"
+          [[ "$REPO" =~ ^\.+$ ]] && fail "invalid repo"
+          [[ "${REPO,,}" == "owner-gate" ]] && fail "the gate cannot act on itself"
+          endpoint="${endpoint//@REPO@/$REPO}"
+        else
+          [[ -z "$REPO" ]] || fail "repo not allowed for this action"
+        fi
+
+        if [[ "$need_id" == 1 ]]; then
+          [[ "$ID" =~ ^[0-9]{1,20}$ ]] || fail "invalid or missing id"
+          endpoint="${endpoint//@ID@/$ID}"
+        else
+          [[ -z "$ID" ]] || fail "id not allowed for this action"
+        fi
+
+        case "$body_mode" in
+          required)
+            [[ -n "$BODY" ]] || fail "body required for this action"
+            [[ "$(printf '%s' "$BODY" | wc -c)" -le 8000 ]] || fail "body larger than 8000 bytes"
+            printf '%s' "$BODY" | jq empty >/dev/null 2>&1 || fail "body is not valid JSON"
+            printf '%s' "$BODY" | jq -s -e 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 \
+              || fail "body must be a single JSON object"
+            payload="$BODY"
+            case "$ACTION" in
+              repo-settings)
+                printf '%s' "$BODY" | jq -e '[.. | objects | keys[]]
+                  | any(. == "visibility" or . == "private" or . == "security_and_analysis" or . == "archived" or . == "default_branch")
+                  | not' >/dev/null 2>&1 \
+                  || fail "repo-settings body may not contain visibility, private, security_and_analysis, archived or default_branch"
+                ;;
+              actions-workflow-permissions)
+                printf '%s' "$BODY" | jq -e '((.can_approve_pull_request_reviews // false) == false)
+                  and ((.default_workflow_permissions // "read") == "read")' >/dev/null 2>&1 \
+                  || fail "can_approve_pull_request_reviews must be absent or false, and default_workflow_permissions absent or read"
+                ;;
+              ruleset-create|ruleset-update)
+                printf '%s' "$BODY" | jq -e '((.enforcement | type == "string") and (.enforcement | ascii_downcase) == "active")
+                  and ((.bypass_actors // []) == [])' >/dev/null 2>&1 \
+                  || fail "ruleset body must set enforcement to active and may not set bypass_actors"
+                ;;
+            esac
+            ;;
+          *)
+            [[ -z "$BODY" ]] || fail "body not allowed for this action"
+            ;;
+        esac
+
+        sha="$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1)"
+        if [[ -n "$payload" ]]; then
+          payload="$(printf '%s' "$payload" | jq -c .)"
+        fi
+
+        {
+          echo "method=$method"
+          echo "endpoint=$endpoint"
+          echo "body_sha256=$sha"
+          echo "payload=$payload"
+        } >>"$GITHUB_OUTPUT"
