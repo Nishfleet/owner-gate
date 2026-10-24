@@ -38,6 +38,9 @@ outputs:
   payload:
     description: Compacted JSON payload sent to the API ('' when the action takes no body)
     value: ${{ steps.resolve.outputs.payload }}
+  reason:
+    description: Rejection message when the input is refused ('' when accepted)
+    value: ${{ steps.resolve.outputs.reason }}
 
 runs:
   using: composite
@@ -52,7 +55,7 @@ runs:
         BODY: ${{ inputs.body }}
       run: |
         set -uo pipefail
-        fail() { echo "::error::$1"; exit 1; }
+        fail() { echo "::error::$1"; echo "reason=$1" >>"$GITHUB_OUTPUT"; exit 1; }
 
         owner="Nishfleet"
         need_repo=0
@@ -113,7 +116,7 @@ runs:
                 ;;
               ruleset-create|ruleset-update)
                 printf '%s' "$BODY" | jq -e '((.enforcement | type == "string") and (.enforcement | ascii_downcase) == "active")
-                  and ((.bypass_actors // []) == [])' >/dev/null 2>&1 \
+                  and ((has("bypass_actors") | not) or ((.bypass_actors | type) == "array" and (.bypass_actors | length) == 0))' >/dev/null 2>&1 \
                   || fail "ruleset body must set enforcement to active and may not set bypass_actors"
                 ;;
             esac

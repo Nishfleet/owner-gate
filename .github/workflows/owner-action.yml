@@ -136,6 +136,7 @@ jobs:
           set -uo pipefail
           fail() { echo "::error::$1"; exit 1; }
 
+          [[ -n "$GH_TOKEN" ]] || fail "no owner token"
           # Bind this call to what announce showed the owner.
           sha="$(printf '%s' "$PAYLOAD" | sha256sum | cut -d' ' -f1)"
           [[ "$METHOD" == "$EXPECT_METHOD" ]] || fail "method differs from announce"
