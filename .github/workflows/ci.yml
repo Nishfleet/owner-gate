@@ -60,6 +60,13 @@ jobs:
             endpoint: 'repos/Nishfleet/alpha'
             repo: 'alpha'
             body: '{"has_discussions":true}'
+          - name: 'non-canonical body is compacted before hashing'
+            action: 'ruleset-create'
+            expect: 'accept'
+            endpoint: 'repos/Nishfleet/alpha/rulesets'
+            repo: 'alpha'
+            body: '{ "enforcement" : "active" }'
+            payload: '{"enforcement":"active"}'
           - name: 'repo-archive builds the fixed body'
             action: 'repo-archive'
             expect: 'accept'
@@ -259,6 +266,7 @@ jobs:
           EXPECTED_ENDPOINT: ${{ matrix.endpoint }}
           PAYLOAD: ${{ steps.v.outputs.payload }}
           EXPECTED_PAYLOAD: ${{ matrix.payload }}
+          SHA: ${{ steps.v.outputs.body_sha256 }}
         run: |
           set -euo pipefail
           echo "case: $CASE expected: $EXPECTED outcome: $OUTCOME endpoint: ${ENDPOINT:-<none>}"
@@ -270,6 +278,8 @@ jobs:
             if [[ -n "$EXPECTED_PAYLOAD" ]]; then
               [[ "$PAYLOAD" == "$EXPECTED_PAYLOAD" ]] || { echo "FAIL: payload $PAYLOAD, expected $EXPECTED_PAYLOAD"; exit 1; }
             fi
+            payload_sha="$(printf '%s' "$PAYLOAD" | sha256sum | cut -d' ' -f1)"
+            [[ "$payload_sha" == "$SHA" ]] || { echo "FAIL: body_sha256 $SHA is not the sha256 of the payload the API call sends"; exit 1; }
             echo "PASS"
           else
             [[ "$OUTCOME" == failure ]] || { echo "FAIL: the validation should have rejected this input"; exit 1; }

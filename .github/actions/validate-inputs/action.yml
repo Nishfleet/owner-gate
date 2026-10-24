@@ -123,10 +123,10 @@ runs:
             ;;
         esac
 
-        sha="$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1)"
         if [[ -n "$payload" ]]; then
           payload="$(printf '%s' "$payload" | jq -c .)"
         fi
+        sha="$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1)"
 
         {
           echo "method=$method"
