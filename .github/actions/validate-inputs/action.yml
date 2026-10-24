@@ -110,8 +110,8 @@ runs:
                   || fail "repo-settings body may not contain visibility, private, security_and_analysis, archived or default_branch"
                 ;;
               actions-workflow-permissions)
-                printf '%s' "$BODY" | jq -e '((.can_approve_pull_request_reviews // false) == false)
-                  and ((.default_workflow_permissions // "read") == "read")' >/dev/null 2>&1 \
+                printf '%s' "$BODY" | jq -e '((has("can_approve_pull_request_reviews") | not) or (.can_approve_pull_request_reviews == false))
+                  and ((has("default_workflow_permissions") | not) or (.default_workflow_permissions == "read"))' >/dev/null 2>&1 \
                   || fail "can_approve_pull_request_reviews must be absent or false, and default_workflow_permissions absent or read"
                 ;;
               ruleset-create|ruleset-update)
