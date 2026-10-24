@@ -1,0 +1,362 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validation:
+    name: validate ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: 'test-read-org bare'
+            action: 'test-read-org'
+            expect: 'accept'
+            method: 'GET'
+            endpoint: 'orgs/Nishfleet'
+          - name: 'ruleset-create active body'
+            action: 'ruleset-create'
+            expect: 'accept'
+            method: 'POST'
+            endpoint: 'repos/Nishfleet/alpha/rulesets'
+            repo: 'alpha'
+            body: '{"enforcement":"active"}'
+          - name: 'ruleset-create enforcement case-insensitive'
+            action: 'ruleset-create'
+            expect: 'accept'
+            method: 'POST'
+            endpoint: 'repos/Nishfleet/alpha/rulesets'
+            repo: 'alpha'
+            body: '{"enforcement":"ACTIVE"}'
+          - name: 'ruleset-update empty bypass_actors'
+            action: 'ruleset-update'
+            expect: 'accept'
+            method: 'PUT'
+            endpoint: 'repos/Nishfleet/alpha/rulesets/123'
+            repo: 'alpha'
+            id: '123'
+            body: '{"enforcement":"active","bypass_actors":[]}'
+          - name: 'ruleset-delete resolves the id'
+            action: 'ruleset-delete'
+            expect: 'accept'
+            method: 'DELETE'
+            endpoint: 'repos/Nishfleet/alpha/rulesets/9'
+            repo: 'alpha'
+            id: '9'
+          - name: 'repo-create takes no repo'
+            action: 'repo-create'
+            expect: 'accept'
+            method: 'POST'
+            endpoint: 'orgs/Nishfleet/repos'
+            body: '{"name":"beta"}'
+          - name: 'repo-settings safe keys'
+            action: 'repo-settings'
+            expect: 'accept'
+            method: 'PATCH'
+            endpoint: 'repos/Nishfleet/alpha'
+            repo: 'alpha'
+            body: '{"has_discussions":true}'
+          - name: 'non-canonical body is compacted before hashing'
+            action: 'ruleset-create'
+            expect: 'accept'
+            method: 'POST'
+            endpoint: 'repos/Nishfleet/alpha/rulesets'
+            repo: 'alpha'
+            body: '{ "enforcement" : "active" }'
+            payload: '{"enforcement":"active"}'
+          - name: 'repo-archive builds the fixed body'
+            action: 'repo-archive'
+            expect: 'accept'
+            method: 'PATCH'
+            endpoint: 'repos/Nishfleet/alpha'
+            repo: 'alpha'
+            payload: '{"archived":true}'
+          - name: 'actions-workflow-permissions read'
+            action: 'actions-workflow-permissions'
+            expect: 'accept'
+            method: 'PUT'
+            endpoint: 'repos/Nishfleet/alpha/actions/permissions/workflow'
+            repo: 'alpha'
+            body: '{"default_workflow_permissions":"read"}'
+          - name: 'vulnerability-alerts-enable no body'
+            action: 'vulnerability-alerts-enable'
+            expect: 'accept'
+            method: 'PUT'
+            endpoint: 'repos/Nishfleet/alpha/vulnerability-alerts'
+            repo: 'alpha'
+          - name: 'repo name charset letters digits dot dash underscore'
+            action: 'ruleset-create'
+            expect: 'accept'
+            method: 'POST'
+            endpoint: 'repos/Nishfleet/a.B-c_9/rulesets'
+            repo: 'a.B-c_9'
+            body: '{"enforcement":"active"}'
+          - name: 'unknown action refused'
+            action: 'bogus-action'
+            expect: 'reject'
+            reason: 'unknown action'
+          - name: 'ruleset-create without repo'
+            action: 'ruleset-create'
+            expect: 'reject'
+            reason: 'invalid or missing repo'
+            body: '{"enforcement":"active"}'
+          - name: 'repo with a slash refused'
+            action: 'ruleset-create'
+            expect: 'reject'
+            reason: 'invalid or missing repo'
+            repo: '../org'
+            body: '{"enforcement":"active"}'
+          - name: 'dots-only repo refused'
+            action: 'ruleset-create'
+            expect: 'reject'
+            reason: 'invalid repo'
+            repo: '..'
+            body: '{"enforcement":"active"}'
+          - name: 'repo longer than 100 chars refused'
+            action: 'ruleset-create'
+            expect: 'reject'
+            reason: 'invalid or missing repo'
+            repo: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            body: '{"enforcement":"active"}'
+          - name: 'gate cannot act on itself'
+            action: 'ruleset-create'
+            expect: 'reject'
+            reason: 'the gate cannot act on itself'
+            repo: 'owner-gate'
+            body: '{"enforcement":"active"}'
+          - name: 'gate self-check case-insensitive'
+            action: 'ruleset-create'
+            expect: 'reject'
+            reason: 'the gate cannot act on itself'
+            repo: 'OWNER-GATE'
+            body: '{"enforcement":"active"}'
+          - name: 'ruleset-delete without id'
+            action: 'ruleset-delete'
+            expect: 'reject'
+            reason: 'invalid or missing id'
+            repo: 'alpha'
+          - name: 'id with letters refused'
+            action: 'ruleset-delete'
+            expect: 'reject'
+            reason: 'invalid or missing id'
+            repo: 'alpha'
+            id: 'abc123'
+          - name: 'negative id refused'
+            action: 'ruleset-delete'
+            expect: 'reject'
+            reason: 'invalid or missing id'
+            repo: 'alpha'
+            id: '-1'
+          - name: 'id longer than 20 digits refused'
+            action: 'ruleset-delete'
+            expect: 'reject'
+            reason: 'invalid or missing id'
+            repo: 'alpha'
+            id: '999999999999999999999'
+          - name: 'repo not allowed for test-read-org'
+            action: 'test-read-org'
+            expect: 'reject'
+            reason: 'repo not allowed for this action'
+            repo: 'alpha'
+          - name: 'id not allowed for vulnerability-alerts-enable'
+            action: 'vulnerability-alerts-enable'
+            expect: 'reject'
+            reason: 'id not allowed for this action'
+            repo: 'alpha'
+            id: '1'
+          - name: 'ruleset-create without body'
+            action: 'ruleset-create'
+            expect: 'reject'
+            reason: 'body required for this action'
+            repo: 'alpha'
+          - name: 'repo-archive rejects a body'
+            action: 'repo-archive'
+            expect: 'reject'
+            reason: 'body not allowed for this action'
+            repo: 'alpha'
+            body: '{"x":1}'
+          - name: 'vulnerability-alerts-enable rejects a body'
+            action: 'vulnerability-alerts-enable'
+            expect: 'reject'
+            reason: 'body not allowed for this action'
+            repo: 'alpha'
+            body: '{"x":1}'
+          - name: 'invalid JSON refused'
+            action: 'repo-create'
+            expect: 'reject'
+            reason: 'body is not valid JSON'
+            body: '{oops'
+          - name: 'JSON array is not an object'
+            action: 'repo-create'
+            expect: 'reject'
+            reason: 'body must be a single JSON object'
+            body: '[]'
+          - name: 'JSON string is not an object'
+            action: 'repo-create'
+            expect: 'reject'
+            reason: 'body must be a single JSON object'
+            body: '"x"'
+          - name: 'two JSON documents are not one object'
+            action: 'repo-create'
+            expect: 'reject'
+            reason: 'body must be a single JSON object'
+            body: '{"a":1} {"b":2}'
+          - name: 'body larger than 8000 bytes refused'
+            action: 'repo-create'
+            expect: 'reject'
+            reason: 'body larger than 8000 bytes'
+            body: '{"description":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+          - name: 'repo-settings visibility refused'
+            action: 'repo-settings'
+            expect: 'reject'
+            reason: 'repo-settings body may not contain visibility, private, security_and_analysis, archived or default_branch'
+            repo: 'alpha'
+            body: '{"visibility":"private"}'
+          - name: 'repo-settings nested private refused'
+            action: 'repo-settings'
+            expect: 'reject'
+            reason: 'repo-settings body may not contain visibility, private, security_and_analysis, archived or default_branch'
+            repo: 'alpha'
+            body: '{"x":{"private":true}}'
+          - name: 'repo-settings security_and_analysis refused'
+            action: 'repo-settings'
+            expect: 'reject'
+            reason: 'repo-settings body may not contain visibility, private, security_and_analysis, archived or default_branch'
+            repo: 'alpha'
+            body: '{"security_and_analysis":{"secret_scanning":"enabled"}}'
+          - name: 'repo-settings default_branch refused'
+            action: 'repo-settings'
+            expect: 'reject'
+            reason: 'repo-settings body may not contain visibility, private, security_and_analysis, archived or default_branch'
+            repo: 'alpha'
+            body: '{"default_branch":"main"}'
+          - name: 'repo-settings archived refused'
+            action: 'repo-settings'
+            expect: 'reject'
+            reason: 'repo-settings body may not contain visibility, private, security_and_analysis, archived or default_branch'
+            repo: 'alpha'
+            body: '{"archived":false}'
+          - name: 'approval rights refused'
+            action: 'actions-workflow-permissions'
+            expect: 'reject'
+            reason: 'can_approve_pull_request_reviews must be absent or false, and default_workflow_permissions absent or read'
+            repo: 'alpha'
+            body: '{"can_approve_pull_request_reviews":true}'
+          - name: 'workflow write permissions refused'
+            action: 'actions-workflow-permissions'
+            expect: 'reject'
+            reason: 'can_approve_pull_request_reviews must be absent or false, and default_workflow_permissions absent or read'
+            repo: 'alpha'
+            body: '{"default_workflow_permissions":"write"}'
+          - name: 'workflow permissions null refused'
+            action: 'actions-workflow-permissions'
+            expect: 'reject'
+            reason: 'can_approve_pull_request_reviews must be absent or false, and default_workflow_permissions absent or read'
+            repo: 'alpha'
+            body: '{"default_workflow_permissions":null}'
+          - name: 'approval rights null refused'
+            action: 'actions-workflow-permissions'
+            expect: 'reject'
+            reason: 'can_approve_pull_request_reviews must be absent or false, and default_workflow_permissions absent or read'
+            repo: 'alpha'
+            body: '{"can_approve_pull_request_reviews":null}'
+          - name: 'ruleset enforcement disabled refused'
+            action: 'ruleset-create'
+            expect: 'reject'
+            reason: 'ruleset body must set enforcement to active and may not set bypass_actors'
+            repo: 'alpha'
+            body: '{"enforcement":"disabled"}'
+          - name: 'ruleset enforcement evaluate refused'
+            action: 'ruleset-create'
+            expect: 'reject'
+            reason: 'ruleset body must set enforcement to active and may not set bypass_actors'
+            repo: 'alpha'
+            body: '{"enforcement":"evaluate"}'
+          - name: 'ruleset enforcement missing refused'
+            action: 'ruleset-create'
+            expect: 'reject'
+            reason: 'ruleset body must set enforcement to active and may not set bypass_actors'
+            repo: 'alpha'
+            body: '{"name":"r"}'
+          - name: 'ruleset non-empty bypass_actors refused'
+            action: 'ruleset-update'
+            expect: 'reject'
+            reason: 'ruleset body must set enforcement to active and may not set bypass_actors'
+            repo: 'alpha'
+            id: '5'
+            body: '{"enforcement":"active","bypass_actors":[{"actor_id":1,"actor_type":"Team","bypass_mode":"always"}]}'
+          - name: 'ruleset bypass_actors null refused'
+            action: 'ruleset-update'
+            expect: 'reject'
+            reason: 'ruleset body must set enforcement to active and may not set bypass_actors'
+            repo: 'alpha'
+            id: '5'
+            body: '{"enforcement":"active","bypass_actors":null}'
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Run the validation
+        id: v
+        continue-on-error: true
+        uses: ./.github/actions/validate-inputs
+        with:
+          action: ${{ matrix.action }}
+          repo: ${{ matrix.repo }}
+          id: ${{ matrix.id }}
+          body: ${{ matrix.body }}
+
+      - name: Check the result
+        if: always()
+        env:
+          CASE: ${{ matrix.name }}
+          EXPECTED: ${{ matrix.expect }}
+          OUTCOME: ${{ steps.v.outcome }}
+          ENDPOINT: ${{ steps.v.outputs.endpoint }}
+          EXPECTED_ENDPOINT: ${{ matrix.endpoint }}
+          PAYLOAD: ${{ steps.v.outputs.payload }}
+          EXPECTED_PAYLOAD: ${{ matrix.payload }}
+          SHA: ${{ steps.v.outputs.body_sha256 }}
+          METHOD: ${{ steps.v.outputs.method }}
+          EXPECTED_METHOD: ${{ matrix.method }}
+          REASON: ${{ steps.v.outputs.reason }}
+          EXPECTED_REASON: ${{ matrix.reason }}
+        run: |
+          set -euo pipefail
+          echo "case: $CASE expected: $EXPECTED outcome: $OUTCOME endpoint: ${ENDPOINT:-<none>}"
+          if [[ "$EXPECTED" == accept ]]; then
+            [[ "$OUTCOME" == success ]] || { echo "FAIL: the validation should have accepted this input"; exit 1; }
+            if [[ -n "$EXPECTED_ENDPOINT" ]]; then
+              [[ "$ENDPOINT" == "$EXPECTED_ENDPOINT" ]] || { echo "FAIL: endpoint $ENDPOINT, expected $EXPECTED_ENDPOINT"; exit 1; }
+            fi
+            if [[ -n "$EXPECTED_PAYLOAD" ]]; then
+              [[ "$PAYLOAD" == "$EXPECTED_PAYLOAD" ]] || { echo "FAIL: payload $PAYLOAD, expected $EXPECTED_PAYLOAD"; exit 1; }
+            fi
+            if [[ -n "$EXPECTED_METHOD" ]]; then
+              [[ "$METHOD" == "$EXPECTED_METHOD" ]] || { echo "FAIL: method $METHOD, expected $EXPECTED_METHOD"; exit 1; }
+            fi
+            [[ -z "$REASON" ]] || { echo "FAIL: accepted this input with reason '$REASON'"; exit 1; }
+            payload_sha="$(printf '%s' "$PAYLOAD" | sha256sum | cut -d' ' -f1)"
+            [[ "$payload_sha" == "$SHA" ]] || { echo "FAIL: body_sha256 $SHA is not the sha256 of the payload the API call sends"; exit 1; }
+            echo "PASS"
+          else
+            [[ "$OUTCOME" == failure ]] || { echo "FAIL: the validation should have rejected this input"; exit 1; }
+            if [[ -n "$EXPECTED_REASON" ]]; then
+              [[ "$REASON" == "$EXPECTED_REASON" ]] || { echo "FAIL: rejected with reason '$REASON', expected '$EXPECTED_REASON'"; exit 1; }
+            fi
+            echo "PASS"
+          fi

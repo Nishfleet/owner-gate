@@ -7,8 +7,9 @@ action; GitHub pauses the `act` job until the owner approves it in the GitHub
 mobile app. Only then does the job get the secret and make that single call.
 
 There is no free-form method or endpoint. The org is hard-coded as `Nishfleet`.
-Each named action maps to exactly one method and endpoint template in the
-workflow, and the endpoint is never built from raw input.
+Each named action maps to exactly one method and endpoint template in
+`.github/actions/validate-inputs/action.yml`, and the endpoint is never built
+from raw input.
 
 ## Use (agents)
 
@@ -83,6 +84,9 @@ file from the dispatched ref, so the guarantee depends on all of these:
 
 - the environment `owner` keeps "deployment branches: main only", so no branch
   copy of this workflow can obtain the secret;
+- `.github/actions/validate-inputs/action.yml` runs from the dispatched ref and
+  decides the one method and endpoint the owner token may call, so it is part
+  of the trusted surface exactly like the workflow file;
 - the environment's required reviewer is the owner, and admins cannot bypass it;
 - `main` is frozen by a ruleset, so changes land only when the owner lifts it;
 - agents dispatch only with credentials that cannot approve deployments, and
@@ -92,9 +96,12 @@ Removing any of these removes the guarantee.
 
 ## Add an action
 
-Open a PR that adds the action to the `options` list and to the `case` block in
-BOTH jobs (`announce` and `act`) of `.github/workflows/owner-action.yml`. The
-owner lifts the main ruleset to merge it.
+Open a PR that adds the action to the `options` list in
+`.github/workflows/owner-action.yml` and to the `case` block in
+`.github/actions/validate-inputs/action.yml` (the one copy of the validation
+that both the `announce` and `act` jobs run). The owner lifts the main ruleset
+to merge it. The `ci` workflow checks every accepted and rejected input shape
+against that one copy, so add or adjust a matrix case there too.
 
 ## Rules
 
