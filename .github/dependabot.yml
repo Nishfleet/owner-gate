@@ -1,5 +1,5 @@
-# Stock bump half of the SHA-pin pairing: every `uses:` in .github/workflows/
-# is pinned to a full commit SHA, and this keeps the pins current.
+# Stock watch for GitHub Actions. No workflow here uses a third-party action
+# today, so this idles until one is added; then it keeps the SHA pins current.
 # Shape copied from Nishfleet/fleet-ops (fleet-ops#10655, part of #9965).
 version: 2
 
