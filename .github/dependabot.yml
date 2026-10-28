@@ -1,0 +1,21 @@
+# Stock bump half of the SHA-pin pairing: every `uses:` in .github/workflows/
+# is pinned to a full commit SHA, and this keeps the pins current.
+# Shape copied from Nishfleet/fleet-ops (fleet-ops#10655, part of #9965).
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+      time: "09:35"
+      timezone: Asia/Kolkata
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: ci
+    groups:
+      github-actions:
+        patterns:
+          - "*"
